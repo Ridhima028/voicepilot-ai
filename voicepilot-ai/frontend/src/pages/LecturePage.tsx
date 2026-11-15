@@ -10,7 +10,7 @@ import Quiz from "../components/Quiz";
 import StatusBadge from "../components/StatusBadge";
 import Transcript from "../components/Transcript";
 import { usePolling } from "../hooks/usePolling";
-import { api, errorMessage, formatTime } from "../services/api";
+import { IN_PROGRESS, api, errorMessage, formatTime, isStudyPackRunning } from "../services/api";
 import type { AiField, Lecture, StudyPackStatus } from "../services/api";
 
 type Tab = "transcript" | AiField;
@@ -85,8 +85,21 @@ export default function LecturePage() {
     loadAudio();
   }, [load, loadAudio]);
 
-  const inFlight = lecture?.status === "queued" || lecture?.status === "processing";
-  usePolling(load, 3000, inFlight);
+  const inFlight = lecture ? IN_PROGRESS.includes(lecture.status) : false;
+  // The worker generates the study pack right after transcription; keep
+  // polling until it's done so the tabs fill in by themselves.
+  const autoPack = isStudyPackRunning(lecture?.study_pack_status);
+  usePolling(load, 3000, inFlight || autoPack);
+  // Either kind of "generate everything" locks the per-tab buttons.
+  const packRunning = packBusy || autoPack;
+
+  // A YouTube import has no audio until the worker has downloaded it, so the
+  // first /audio-url call 404s. Try again once it reaches the next stage.
+  const status = lecture?.status;
+  useEffect(() => {
+    // Runs only when the status changes, not on every audioSrc change.
+    if ((status === "processing" || status === "completed") && !audioSrc) loadAudio();
+  }, [status]);
 
   if (lecture?.status === "queued") queuedSince.current ??= Date.now();
   else queuedSince.current = null;
@@ -217,10 +230,12 @@ export default function LecturePage() {
             can take up to a minute.
           </p>
         )}
-        {packBusy && (
+        {packRunning && (
           <p className="alert alert-info">
-            <span className="spinner spinner-xs" aria-hidden="true" /> “Generate everything” is running. This
-            tab fills in when it finishes, and its buttons unlock then.
+            <span className="spinner spinner-xs" aria-hidden="true" />
+            {autoPack
+              ? "Study material is being generated automatically. This tab fills in by itself, usually within a minute or two."
+              : "“Generate everything” is running. This tab fills in when it finishes, and its buttons unlock then."}
           </p>
         )}
         {!filled && !busy && (
@@ -230,7 +245,7 @@ export default function LecturePage() {
               type="button"
               className="btn btn-primary"
               onClick={() => generate(field, false)}
-              disabled={packBusy}
+              disabled={packRunning}
             >
               Generate {label.toLowerCase()}
             </button>
@@ -243,7 +258,7 @@ export default function LecturePage() {
                 type="button"
                 className="btn btn-ghost btn-sm"
                 onClick={() => generate(field, true)}
-                disabled={busy || packBusy}
+                disabled={busy || packRunning}
               >
                 ↻ Regenerate
               </button>
@@ -263,7 +278,14 @@ export default function LecturePage() {
 
       <section className="card">
         <div className="lecture-header">
-          <h1 className="lecture-heading">{lecture.title}</h1>
+          <div className="lecture-title-block">
+            <h1 className="lecture-heading">{lecture.title}</h1>
+            {lecture.source_url && (
+              <a href={lecture.source_url} target="_blank" rel="noopener noreferrer" className="yt-link">
+                Open on YouTube ↗
+              </a>
+            )}
+          </div>
           <StatusBadge status={lecture.status} />
         </div>
         <div className="lecture-meta muted small">
@@ -292,9 +314,9 @@ export default function LecturePage() {
             type="button"
             className="btn btn-primary"
             onClick={generateEverything}
-            disabled={!completed || packBusy}
+            disabled={!completed || packRunning}
           >
-            {packBusy ? (
+            {packRunning ? (
               <>
                 <span className="spinner spinner-xs" aria-hidden="true" /> Generating…
               </>
@@ -342,11 +364,19 @@ export default function LecturePage() {
           <span className="spinner spinner-lg" aria-hidden="true" />
           <div>
             <p>
-              <strong>{lecture.status === "queued" ? "Waiting in the queue…" : "Transcribing…"}</strong>
+              <strong>
+                {lecture.status === "queued"
+                  ? "Waiting in the queue…"
+                  : lecture.status === "downloading"
+                    ? "Downloading audio from YouTube…"
+                    : "Transcribing…"}
+              </strong>
             </p>
             <p className="muted">
-              The Celery worker is transcribing this lecture with Whisper. This page updates on its own; long
-              lectures can take a few minutes.
+              {lecture.status === "downloading"
+                ? "The Celery worker is fetching the audio track with yt-dlp and saving it to storage. Transcription with Whisper starts right after."
+                : "The Celery worker is transcribing this lecture with Whisper."}{" "}
+              This page updates on its own; long lectures can take a few minutes.
             </p>
             {stuckInQueue && (
               <p className="alert alert-warning">
@@ -369,6 +399,13 @@ export default function LecturePage() {
       )}
 
       {semanticWarning && <p className="alert alert-warning small">{lecture.error_message}</p>}
+
+      {completed && !autoPack && lecture.study_pack_error && (
+        <p className="alert alert-warning small">
+          Some study material couldn't be generated automatically ({lecture.study_pack_error}). Use the
+          Generate button in those tabs to try again.
+        </p>
+      )}
 
       {completed && (
         <section className="card">

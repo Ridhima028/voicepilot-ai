@@ -16,21 +16,85 @@ those raw segments using two signals together:
 A chunk also has a hard max-duration cap, so one very consistent topic
 doesn't turn into a five-minute unreadable block.
 
-Uses Gemini's embedding API instead of a local model — this used to run on
+Uses an embedding API instead of a local model — this used to run on
 sentence-transformers (which pulls in PyTorch, a 2GB+ download that isn't
-needed anywhere else in this project). Calling the API instead means no
-heavy local install, at the cost of needing network access + a Gemini key.
+needed anywhere else in this project). Calling an API instead means no
+heavy local install, at the cost of needing network access + a key: Qwen via
+OpenRouter when QWEN_API_KEY is set, otherwise Gemini.
 """
 
+import time
+
+import httpx
 import numpy as np
 from google.genai.types import EmbedContentConfig
 
-from config import GEMINI_EMBEDDING_MODEL
+from config import GEMINI_EMBEDDING_MODEL, QWEN_API_KEY, QWEN_EMBEDDING_MODEL
 from services.gemini_client import get_client
+
+OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
+EMBEDDING_BATCH_SIZE = 100
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+class EmbeddingError(Exception):
+    """The embedding API failed or returned something unusable."""
+    pass
+
+
+def embedding_model_name() -> str:
+    """Which model _embed_texts uses. Vectors from different models can't be
+    compared, so this gets stored alongside any embeddings we keep."""
+    return QWEN_EMBEDDING_MODEL if QWEN_API_KEY else GEMINI_EMBEDDING_MODEL
+
+
+def _embed_batch_openrouter(client: httpx.Client, texts: list[str]) -> list[list[float]]:
+    headers = {
+        "Authorization": f"Bearer {QWEN_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {"model": QWEN_EMBEDDING_MODEL, "input": texts}
+
+    for attempt in range(3):
+        response = client.post(OPENROUTER_EMBEDDINGS_URL, headers=headers, json=payload)
+        if response.status_code < 400:
+            break
+        if response.status_code not in RETRYABLE_STATUS_CODES or attempt == 2:
+            raise EmbeddingError(
+                f"Qwen embedding failed: {response.status_code} {response.text[:300]}"
+            )
+        time.sleep(2 ** attempt)
+
+    try:
+        # The API may return items in any order; "index" ties each one to its input.
+        items = sorted(response.json()["data"], key=lambda item: item["index"])
+        vectors = [item["embedding"] for item in items]
+    except (KeyError, TypeError, ValueError) as e:
+        raise EmbeddingError("OpenRouter returned an unexpected embeddings response.") from e
+
+    if len(vectors) != len(texts):
+        raise EmbeddingError(
+            f"Qwen embedding returned {len(vectors)} vectors for {len(texts)} texts."
+        )
+    return vectors
+
+
+def _embed_texts_openrouter(texts: list[str]) -> np.ndarray:
+    vectors: list[list[float]] = []
+    # Sync client on purpose: this runs inside the Celery worker.
+    with httpx.Client(timeout=60) as client:
+        for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            vectors.extend(
+                _embed_batch_openrouter(client, texts[start:start + EMBEDDING_BATCH_SIZE])
+            )
+    return np.array(vectors)
 
 
 def _embed_texts(texts: list[str]) -> np.ndarray:
-    """One batched API call for every segment's text, not one call per segment."""
+    """Batched API calls for every segment's text, not one call per segment."""
+    if QWEN_API_KEY:
+        return _embed_texts_openrouter(texts)
+
     client = get_client()
     response = client.models.embed_content(
         model=GEMINI_EMBEDDING_MODEL,

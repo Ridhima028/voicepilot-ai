@@ -1,6 +1,6 @@
 from faster_whisper import WhisperModel
 
-from config import MAX_DURATION_SECONDS, MAX_DURATION_MINUTES
+from config import MAX_DURATION_SECONDS, MAX_DURATION_MINUTES, WHISPER_LANGUAGE
 
 
 class AudioTooLongError(Exception):
@@ -20,7 +20,8 @@ model = WhisperModel(
 def transcribe_audio(audio_path: str):
     segments, info = model.transcribe(
         audio_path,
-        beam_size=5
+        beam_size=5,
+        language=WHISPER_LANGUAGE,  # None = auto-detect (see config.py)
     )
 
     # info.duration is populated as soon as Whisper loads the audio header —

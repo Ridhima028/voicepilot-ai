@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import UploadCard from "../components/UploadCard";
 import { usePolling } from "../hooks/usePolling";
-import { api, errorMessage, formatTime, parseServerDate } from "../services/api";
+import { IN_PROGRESS, api, errorMessage, formatTime, isStudyPackRunning, parseServerDate } from "../services/api";
 import type { LectureListItem } from "../services/api";
 
 const CHIPS: [keyof LectureListItem, string][] = [
@@ -32,7 +32,9 @@ export default function Dashboard() {
 
   useEffect(load, [load]);
 
-  const anyBusy = (lectures ?? []).some((l) => l.status === "queued" || l.status === "processing");
+  const anyBusy = (lectures ?? []).some(
+    (l) => IN_PROGRESS.includes(l.status) || isStudyPackRunning(l.study_pack_status),
+  );
   usePolling(load, 3000, anyBusy);
 
   return (
@@ -64,13 +66,25 @@ export default function Dashboard() {
               <li key={l.id}>
                 <Link to={`/lectures/${l.id}`} className="lecture-row">
                   <div className="lecture-row-top">
-                    <span className="lecture-title">{l.title}</span>
+                    <span className="lecture-title">
+                      {l.source_url && (
+                        <span className="yt-mark" title="Imported from YouTube">
+                          ▶
+                        </span>
+                      )}
+                      {l.title}
+                    </span>
                     <StatusBadge status={l.status} />
                   </div>
                   <div className="lecture-meta muted small">
                     <span>{parseServerDate(l.created_at).toLocaleString()}</span>
                     {l.duration_seconds != null && <span>{formatTime(l.duration_seconds)}</span>}
                     {l.language && <span>{l.language.toUpperCase()}</span>}
+                    {l.status === "completed" && isStudyPackRunning(l.study_pack_status) && (
+                      <span className="preparing">
+                        <span className="spinner spinner-xs" aria-hidden="true" /> Preparing study material…
+                      </span>
+                    )}
                   </div>
                   {CHIPS.some(([key]) => l[key]) && (
                     <div className="chips">

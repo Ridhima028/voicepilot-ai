@@ -11,6 +11,7 @@ from database import Base
 from migrations import run_additive_migrations
 from routers import auth, lectures
 from services.storage import ensure_bucket
+from config import YOUTUBE_IMPORT_ENABLED
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,6 +44,12 @@ def home():
     return {
         "message": "Welcome to VoicePilot AI 🚀"
     }
+
+
+@app.get("/config")
+def public_config():
+    """Feature flags the frontend needs before login. Public: no secrets here."""
+    return {"youtube_import": YOUTUBE_IMPORT_ENABLED}
 
 
 @app.get("/health")

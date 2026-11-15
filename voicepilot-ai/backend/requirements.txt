@@ -14,3 +14,4 @@ httpx
 numpy
 celery[redis]
 boto3
+yt-dlp[default]  # [default] adds yt-dlp-ejs, which solves YouTube's JS challenge with deno

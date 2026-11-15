@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent } from "react";
+import type { ChangeEvent, DragEvent, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, errorMessage, formatTime } from "../services/api";
 
@@ -25,12 +25,30 @@ export default function UploadCard() {
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
 
+  // YouTube import state. Hidden until the server says the feature is on,
+  // and stays hidden if that check fails.
+  const [ytEnabled, setYtEnabled] = useState(false);
+  const [ytUrl, setYtUrl] = useState("");
+  const [ytBusy, setYtBusy] = useState(false);
+  const [ytError, setYtError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!recording) return;
     const started = Date.now();
     const id = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 250);
     return () => window.clearInterval(id);
   }, [recording]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getConfig()
+      .then((cfg) => !cancelled && setYtEnabled(cfg.youtube_import))
+      .catch(() => !cancelled && setYtEnabled(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Stop the microphone if the user navigates away mid-recording.
   useEffect(
@@ -110,6 +128,21 @@ export default function UploadCard() {
     setRecording(true);
   }
 
+  async function importYoutube(e: FormEvent) {
+    e.preventDefault();
+    setYtError(null);
+    setYtBusy(true);
+    try {
+      // The backend checks the link and the video length (a few seconds),
+      // then queues the download; the lecture page shows the progress.
+      const lecture = await api.importYoutube(ytUrl.trim());
+      navigate(`/lectures/${lecture.id}`);
+    } catch (err) {
+      setYtError(errorMessage(err));
+      setYtBusy(false);
+    }
+  }
+
   function stopRecording(discard: boolean) {
     discardRef.current = discard;
     recorderRef.current?.stop();
@@ -179,6 +212,40 @@ export default function UploadCard() {
               🎤 Record in browser
             </button>
           </div>
+
+          {ytEnabled && (
+            <form className="yt-form" onSubmit={importYoutube}>
+              <label htmlFor="yt-url" className="yt-label">
+                ▶ YouTube link
+              </label>
+              <div className="yt-row">
+                <input
+                  id="yt-url"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  value={ytUrl}
+                  onChange={(e) => setYtUrl(e.target.value)}
+                  disabled={ytBusy || busy}
+                  required
+                />
+                <button type="submit" className="btn btn-primary" disabled={ytBusy || busy || !ytUrl.trim()}>
+                  {ytBusy ? (
+                    <>
+                      <span className="spinner spinner-xs" aria-hidden="true" /> Checking…
+                    </>
+                  ) : (
+                    "Transcribe"
+                  )}
+                </button>
+              </div>
+              {ytError && (
+                <p className="alert alert-error" role="alert">
+                  {ytError}
+                </p>
+              )}
+            </form>
+          )}
         </>
       )}
 

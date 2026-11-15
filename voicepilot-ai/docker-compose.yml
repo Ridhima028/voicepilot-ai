@@ -79,6 +79,9 @@ services:
 
     volumes:
       - ./backend:/app
+      # Whisper model cache (~460 MB). On a volume so recreating the worker
+      # doesn't throw it away and re-download it on the next job.
+      - whisper-models:/root/.cache/huggingface
 
   minio:
     # S3-compatible object storage for audio files. The backend talks to it
@@ -128,3 +131,4 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  whisper-models:

@@ -9,6 +9,14 @@ MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 MAX_DURATION_MINUTES = int(os.getenv("MAX_DURATION_MINUTES", "90"))
 MAX_DURATION_SECONDS = MAX_DURATION_MINUTES * 60
 
+# Language Whisper transcribes into. "en" by default: Whisper "small" can't
+# write Hindi reliably, and on Hinglish lectures auto-detect picks Hindi and
+# produces garbled text (and ~3x slower, from repeated re-decoding). Forcing
+# English gives clean English text, with Hindi speech rendered in English.
+# Set to "auto" to let Whisper detect the language instead.
+_whisper_language = os.getenv("WHISPER_LANGUAGE", "en").strip().lower()
+WHISPER_LANGUAGE = None if _whisper_language in ("", "auto") else _whisper_language
+
 # Whisper needs an actual audio format it can decode. UploadFile.content_type
 # comes from the browser/client and isn't fully trustworthy on its own
 # (e.g. browsers recording via MediaRecorder often send "video/webm" or
@@ -25,6 +33,11 @@ GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-0
 # --- OpenRouter / Qwen ---
 QWEN_API_KEY = os.getenv("QWEN_API_KEY")
 QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen/qwen3-8b")
+# Upper bound on each reply (thinking + answer). Without it OpenRouter
+# reserves credit for the model's maximum (65k tokens) on every request,
+# which fails with 402 on a low balance even though real replies are small.
+QWEN_MAX_TOKENS = int(os.getenv("QWEN_MAX_TOKENS", "8000"))
+QWEN_EMBEDDING_MODEL = os.getenv("QWEN_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b")
 
 # --- Object storage (S3 API: MinIO locally, AWS S3 in production) ---
 # S3_ENDPOINT_URL is how containers reach storage (http://minio:9000).
@@ -39,3 +52,13 @@ S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 S3_REGION = os.getenv("S3_REGION", "us-east-1")
 S3_BUCKET = os.getenv("S3_BUCKET", "voicepilot-audio")
 S3_PRESIGNED_EXPIRY_SECONDS = int(os.getenv("S3_PRESIGNED_EXPIRY_SECONDS", "900"))
+
+# --- YouTube import ---
+# Off on cloud deployments: YouTube often blocks downloads from server IPs.
+YOUTUBE_IMPORT_ENABLED = os.getenv("YOUTUBE_IMPORT_ENABLED", "true").lower() == "true"
+
+# --- Automatic study pack ---
+# Generate all study material in the worker right after transcription, so
+# it's usually ready before the student opens the lecture. Set to false to
+# only generate on demand (e.g. to control LLM cost).
+AUTO_STUDY_PACK = os.getenv("AUTO_STUDY_PACK", "true").lower() == "true"

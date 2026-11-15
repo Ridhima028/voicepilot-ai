@@ -16,6 +16,7 @@ class LectureResponse(BaseModel):
     status: str
     language: str | None = None
     duration_seconds: float | None = None
+    source_url: str | None = None
 
     transcript: str | None = None
     segments: list | None = None
@@ -28,6 +29,9 @@ class LectureResponse(BaseModel):
     key_concepts: list | None = None
     mindmap: str | None = None
     chapters: list | None = None
+
+    study_pack_status: str | None = None
+    study_pack_error: str | None = None
 
     error_message: str | None = None
     created_at: datetime
@@ -48,6 +52,7 @@ class LectureListItem(BaseModel):
     status: str
     language: str | None = None
     duration_seconds: float | None = None
+    source_url: str | None = None
     created_at: datetime
 
     has_summary: bool = False
@@ -57,6 +62,8 @@ class LectureListItem(BaseModel):
     has_key_concepts: bool = False
     has_mindmap: bool = False
     has_chapters: bool = False
+
+    study_pack_status: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -75,3 +82,9 @@ class AudioUrlResponse(BaseModel):
 
     url: str
     expires_in: int
+
+
+class YouTubeImport(BaseModel):
+    """Body for POST /lectures/from-youtube."""
+
+    url: str

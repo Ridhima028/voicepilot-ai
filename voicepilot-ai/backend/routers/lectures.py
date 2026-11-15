@@ -16,22 +16,36 @@ from database import get_db
 from dependencies import get_current_user
 from models.lecture import Lecture
 from models.user import User
-from schemas.lecture import LectureResponse, LectureListItem, StudyPackStatus, AudioUrlResponse
-from services import storage
+from schemas.lecture import (
+    LectureResponse, LectureListItem, StudyPackStatus, AudioUrlResponse, YouTubeImport,
+)
+from services import storage, youtube_service
 from services.llm_service import (
     generate_summary, generate_notes, generate_quiz, generate_flashcards,
     generate_key_concepts, generate_mindmap, generate_chapters,
     LLMGenerationError,
 )
 from services.export_service import render_study_pack_html
+from services.study_pack import build_study_pack
 from config import (
     MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB, ALLOWED_EXTENSIONS, S3_PRESIGNED_EXPIRY_SECONDS,
+    MAX_DURATION_SECONDS, MAX_DURATION_MINUTES, YOUTUBE_IMPORT_ENABLED,
 )
 
 router = APIRouter(
     prefix="/lectures",
     tags=["Lectures"]
 )
+
+# How long the API waits for YouTube metadata before giving up. The actual
+# download happens in the worker, never in the request.
+YOUTUBE_INFO_TIMEOUT_SECONDS = 20
+
+# Statuses where a job is already queued or running for the lecture.
+IN_PROGRESS_STATUSES = ("queued", "downloading", "processing")
+
+# Automatic study-pack states during which manual generation is refused.
+STUDY_PACK_RUNNING = ("queued", "generating")
 
 def _storage_unavailable() -> HTTPException:
     return HTTPException(
@@ -145,6 +159,70 @@ async def transcribe_lecture(
     return lecture
 
 
+@router.post("/from-youtube", response_model=LectureResponse, status_code=202)
+async def import_from_youtube(
+    payload: YouTubeImport,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Queues a YouTube video for transcription. The API only checks the link
+    and reads the title/duration; the worker downloads the audio, stores it
+    in S3 and runs the same Whisper pipeline as an upload.
+    """
+    if not YOUTUBE_IMPORT_ENABLED:
+        raise HTTPException(status_code=404, detail="YouTube import is not enabled on this server.")
+
+    try:
+        url = youtube_service.validate_youtube_url(payload.url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # yt-dlp is blocking; run it in a thread and cap how long we wait.
+    try:
+        info = await asyncio.wait_for(
+            run_in_threadpool(youtube_service.get_video_info, url),
+            timeout=YOUTUBE_INFO_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="YouTube took too long to respond. Please try again.")
+    except youtube_service.YouTubeTransientError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except youtube_service.YouTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    duration = info.get("duration")
+    if not duration:
+        raise HTTPException(
+            status_code=400,
+            detail="This video has no fixed length (it may be a live stream that's still running).",
+        )
+    # Reject before queueing anything, so we never download a video we'd refuse.
+    if duration > MAX_DURATION_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Video is {duration / 60:.1f} minutes long, which exceeds the "
+                f"{MAX_DURATION_MINUTES}-minute limit."
+            ),
+        )
+
+    lecture = Lecture(
+        user_id=current_user.id,
+        title=info["title"],
+        source_url=url,
+        audio_path="",  # NOT NULL column; filled in by the worker after download
+        status="queued",
+    )
+    db.add(lecture)
+    # Commit BEFORE enqueueing, same as uploads.
+    db.commit()
+    db.refresh(lecture)
+
+    celery_app.send_task("tasks.import_youtube", args=[lecture.id])
+    return lecture
+
+
 # ==========================================================================
 # Retrieval
 # ==========================================================================
@@ -169,6 +247,7 @@ def get_lectures(
             status=lec.status,
             language=lec.language,
             duration_seconds=lec.duration_seconds,
+            source_url=lec.source_url,
             created_at=lec.created_at,
             has_summary=bool(lec.summary),
             has_notes=bool(lec.notes),
@@ -177,6 +256,7 @@ def get_lectures(
             has_key_concepts=bool(lec.key_concepts),
             has_mindmap=bool(lec.mindmap),
             has_chapters=bool(lec.chapters),
+            study_pack_status=lec.study_pack_status,
         )
         for lec in lectures
     ]
@@ -231,6 +311,9 @@ def get_audio_url(
     checked here, and the link expires on its own.
     """
     lecture = _get_owned_lecture(lecture_id, db, current_user)
+    if not lecture.audio_path:
+        # YouTube import whose audio hasn't been downloaded yet.
+        raise HTTPException(status_code=404, detail="No audio is stored for this lecture yet.")
     return AudioUrlResponse(
         url=storage.presigned_get_url(lecture.audio_path, S3_PRESIGNED_EXPIRY_SECONDS),
         expires_in=S3_PRESIGNED_EXPIRY_SECONDS,
@@ -279,6 +362,16 @@ def get_transcript(
 #   - cached by default; ?regenerate=true forces a fresh call
 #   - LLM failures surface as 502, not a silent empty result
 
+def _ensure_not_auto_generating(lecture: Lecture) -> None:
+    """The worker is already generating everything; a manual call would
+    duplicate the LLM work (and cost) and race it to save the result."""
+    if lecture.study_pack_status in STUDY_PACK_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail="Study material is already being generated automatically for this lecture.",
+        )
+
+
 async def _generate_field(
     lecture: Lecture,
     field: str,
@@ -286,6 +379,7 @@ async def _generate_field(
     db: Session,
     regenerate: bool,
 ):
+    _ensure_not_auto_generating(lecture)
     if getattr(lecture, field) and not regenerate:
         return lecture
 
@@ -441,52 +535,13 @@ async def create_study_pack(
     rather than throwing the whole batch away.
     """
     lecture = _get_owned_completed_lecture(lecture_id, db, current_user)
-    segments = lecture.processed_segments or lecture.segments
+    _ensure_not_auto_generating(lecture)
 
-    jobs = [
-        ("summary", lambda: generate_summary(lecture.transcript)),
-        ("notes", lambda: generate_notes(lecture.transcript)),
-        ("key_concepts", lambda: generate_key_concepts(lecture.transcript)),
-        ("quiz", lambda: generate_quiz(lecture.transcript, 5)),
-        ("flashcards", lambda: generate_flashcards(lecture.transcript, 10)),
-        ("mindmap", lambda: generate_mindmap(lecture.transcript)),
-    ]
-    if segments:
-        jobs.append(("chapters", lambda: generate_chapters(segments)))
-
-    generated, skipped, failed = [], [], {}
-
-    to_run = []
-    for field, generator in jobs:
-        if getattr(lecture, field) and not regenerate:
-            skipped.append(field)
-        else:
-            to_run.append((field, generator))
-
-    # The generators are independent network calls, so run them concurrently:
-    # total time ≈ the slowest one, not the sum of all. return_exceptions keeps
-    # one failure from cancelling the rest. Results are applied to the ORM
-    # object only after gather, so the session is never touched concurrently.
-    results = await asyncio.gather(
-        *(generator() for _, generator in to_run),
-        return_exceptions=True,
-    )
-
-    for (field, _), result in zip(to_run, results):
-        if isinstance(result, BaseException):
-            failed[field] = str(result)
-        else:
-            setattr(lecture, field, result)
-            generated.append(field)
-
+    # Same code path as the worker's automatic study pack (services/study_pack.py).
+    result = await build_study_pack(lecture, regenerate=regenerate)
     db.commit()
 
-    return StudyPackStatus(
-        lecture_id=lecture.id,
-        generated=generated,
-        skipped=skipped,
-        failed=failed,
-    )
+    return StudyPackStatus(lecture_id=lecture.id, **result)
 
 
 @router.get("/{lecture_id}/export", response_class=HTMLResponse)
@@ -517,21 +572,26 @@ def retry_transcription(
     """
     Re-runs transcription on a lecture that failed. The original audio is
     still in object storage (we intentionally don't delete it on failure),
-    so the user never has to re-upload.
+    so the user never has to re-upload. A YouTube import whose audio never
+    made it into storage is downloaded again instead.
     """
     lecture = _get_owned_lecture(lecture_id, db, current_user)
 
-    if lecture.status in ("queued", "processing"):
+    if lecture.status in IN_PROGRESS_STATUSES:
         raise HTTPException(status_code=409, detail=f"This lecture is already {lecture.status}.")
 
     # Old dev lectures still hold a local disk path here; that key doesn't
     # exist in the bucket, so they get a clean 410 too.
     try:
-        audio_available = storage.object_exists(lecture.audio_path)
+        audio_available = bool(lecture.audio_path) and storage.object_exists(lecture.audio_path)
     except storage.TRANSIENT_ERRORS:
         raise _storage_unavailable()
 
-    if not audio_available:
+    if audio_available:
+        task_name = "tasks.transcribe_lecture"
+    elif lecture.source_url:
+        task_name = "tasks.import_youtube"
+    else:
         raise HTTPException(
             status_code=410,
             detail="The original audio file is no longer available. Please re-upload."
@@ -542,7 +602,7 @@ def retry_transcription(
     db.commit()
     db.refresh(lecture)
 
-    celery_app.send_task("tasks.transcribe_lecture", args=[lecture.id])
+    celery_app.send_task(task_name, args=[lecture.id])
     return lecture
 
 
@@ -557,10 +617,11 @@ def delete_lecture(
 
     # Object first, then row: if storage is down we keep the row (and
     # return 503) so the user can retry, instead of losing track of the file.
-    try:
-        storage.delete_object(lecture.audio_path)
-    except storage.TRANSIENT_ERRORS:
-        raise _storage_unavailable()
+    if lecture.audio_path:  # empty for a YouTube import not downloaded yet
+        try:
+            storage.delete_object(lecture.audio_path)
+        except storage.TRANSIENT_ERRORS:
+            raise _storage_unavailable()
 
     db.delete(lecture)
     db.commit()

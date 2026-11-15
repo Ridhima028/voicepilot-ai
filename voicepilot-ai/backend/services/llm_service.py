@@ -21,7 +21,7 @@ import httpx
 
 from google.genai import types
 
-from config import GEMINI_MODEL, QWEN_API_KEY, QWEN_MODEL
+from config import GEMINI_MODEL, QWEN_API_KEY, QWEN_MAX_TOKENS, QWEN_MODEL
 from services.gemini_client import get_client
 
 
@@ -156,6 +156,7 @@ async def _generate_openrouter(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
+        "max_tokens": QWEN_MAX_TOKENS,
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}

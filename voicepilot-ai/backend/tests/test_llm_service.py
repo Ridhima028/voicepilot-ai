@@ -117,6 +117,8 @@ def test_json_mode_is_requested(model_reply):
     sent = model_reply(json.dumps(QUIZ_ITEMS))
     run(llm_service.generate_quiz("transcript", 2))
     assert sent["payload"]["response_format"] == {"type": "json_object"}
+    # Caps the credit OpenRouter reserves per request (see QWEN_MAX_TOKENS).
+    assert sent["payload"]["max_tokens"] == llm_service.QWEN_MAX_TOKENS
 
 
 # --------------------------------------------------------------------------
