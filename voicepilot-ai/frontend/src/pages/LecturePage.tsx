@@ -286,7 +286,7 @@ export default function LecturePage() {
               </a>
             )}
           </div>
-          <StatusBadge status={lecture.status} />
+          <StatusBadge status={lecture.status} progress={lecture.progress} />
         </div>
         <div className="lecture-meta muted small">
           {lecture.duration_seconds != null && <span>{formatTime(lecture.duration_seconds)}</span>}
@@ -369,9 +369,23 @@ export default function LecturePage() {
                   ? "Waiting in the queue…"
                   : lecture.status === "downloading"
                     ? "Downloading audio from YouTube…"
-                    : "Transcribing…"}
+                    : lecture.progress != null
+                      ? `Transcribing… ${Math.round(lecture.progress)}%`
+                      : "Transcribing…"}
               </strong>
             </p>
+            {lecture.status === "processing" && lecture.progress != null && (
+              <div
+                className="progress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(lecture.progress)}
+                aria-label="Transcription progress"
+              >
+                <div className="progress-fill" style={{ width: `${Math.min(100, lecture.progress)}%` }} />
+              </div>
+            )}
             <p className="muted">
               {lecture.status === "downloading"
                 ? "The Celery worker is fetching the audio track with yt-dlp and saving it to storage. Transcription with Whisper starts right after."

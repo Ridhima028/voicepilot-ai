@@ -74,7 +74,7 @@ export default function Dashboard() {
                       )}
                       {l.title}
                     </span>
-                    <StatusBadge status={l.status} />
+                    <StatusBadge status={l.status} progress={l.progress} />
                   </div>
                   <div className="lecture-meta muted small">
                     <span>{parseServerDate(l.created_at).toLocaleString()}</span>

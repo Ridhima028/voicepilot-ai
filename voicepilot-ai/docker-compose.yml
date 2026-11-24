@@ -83,6 +83,33 @@ services:
       # doesn't throw it away and re-download it on the next job.
       - whisper-models:/root/.cache/huggingface
 
+  beat:
+    # Celery Beat: puts tasks.sweep_stuck_jobs on the queue every
+    # SWEEP_INTERVAL_SECONDS (a worker runs it). Run EXACTLY ONE instance —
+    # never scale this service, or every sweep is scheduled twice.
+    build:
+      context: ./backend
+
+    container_name: voicepilot-beat
+
+    # Schedule state goes to /tmp, not /app: /app is the bind-mounted source
+    # folder, and the beat state file doesn't belong in the repo.
+    command: celery -A celery_app.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+
+    env_file:
+      - ./backend/.env
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+    volumes:
+      - ./backend:/app
+
   minio:
     # S3-compatible object storage for audio files. The backend talks to it
     # with plain boto3, so moving to AWS S3 later only changes env vars.

@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from celery_app import celery_app
 from database import get_db
 from dependencies import get_current_user
-from models.lecture import Lecture
+from models.lecture import Lecture, set_status
 from models.user import User
 from schemas.lecture import (
     LectureResponse, LectureListItem, StudyPackStatus, AudioUrlResponse, YouTubeImport,
@@ -135,8 +135,8 @@ async def transcribe_lecture(
         user_id=current_user.id,
         title=file.filename,
         audio_path=object_key,
-        status="queued",
     )
+    set_status(lecture, "queued")
     db.add(lecture)
     # Commit BEFORE enqueueing: the worker can pick the job up instantly, and
     # it must be able to see this row when it does.
@@ -212,8 +212,8 @@ async def import_from_youtube(
         title=info["title"],
         source_url=url,
         audio_path="",  # NOT NULL column; filled in by the worker after download
-        status="queued",
     )
+    set_status(lecture, "queued")
     db.add(lecture)
     # Commit BEFORE enqueueing, same as uploads.
     db.commit()
@@ -257,6 +257,7 @@ def get_lectures(
             has_mindmap=bool(lec.mindmap),
             has_chapters=bool(lec.chapters),
             study_pack_status=lec.study_pack_status,
+            progress=lec.progress,
         )
         for lec in lectures
     ]
@@ -597,8 +598,12 @@ def retry_transcription(
             detail="The original audio file is no longer available. Please re-upload."
         )
 
-    lecture.status = "queued"
+    set_status(lecture, "queued")
     lecture.error_message = None
+    # A manual retry is a fresh start for the self-healing sweeper too.
+    lecture.requeue_count = 0
+    lecture.heartbeat_at = None
+    lecture.progress = None
     db.commit()
     db.refresh(lecture)
 

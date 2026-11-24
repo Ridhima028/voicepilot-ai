@@ -9,12 +9,20 @@ const LABELS: Record<LectureStatus, string> = {
   failed: "Failed",
 };
 
-export default function StatusBadge({ status }: { status: LectureStatus }) {
+interface Props {
+  status: LectureStatus;
+  /** Shown as "Transcribing… 43%" while processing, when known. */
+  progress?: number | null;
+}
+
+export default function StatusBadge({ status, progress }: Props) {
   const busy = IN_PROGRESS.includes(status);
+  const showPercent = status === "processing" && progress != null;
   return (
     <span className={`badge badge-${status}`}>
       {busy && <span className="spinner spinner-xs" aria-hidden="true" />}
       {LABELS[status] ?? status}
+      {showPercent && ` ${Math.round(progress)}%`}
     </span>
   );
 }

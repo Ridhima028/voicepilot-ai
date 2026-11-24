@@ -58,13 +58,45 @@ class Lecture(Base):
     # (AUTO_STUDY_PACK): null (never started) -> "queued" -> "generating"
     # -> "ready" or "failed". While queued/generating, the manual generate
     # endpoints return 409 so the same material isn't generated twice.
-    study_pack_status = Column(String, nullable=True)
+    study_pack_status = Column(String, nullable=True, index=True)
     # Items that failed in the last automatic run, e.g. "quiz: rate limited".
     study_pack_error = Column(Text, nullable=True)
+    # When study_pack_status last changed (set_study_pack_status), so the
+    # sweeper can spot a pack stuck in queued/generating.
+    study_pack_updated_at = Column(DateTime, nullable=True)
+    # How many times the sweeper re-queued the study pack (None = 0).
+    study_pack_requeue_count = Column(Integer, nullable=True)
 
     # "queued" -> ("downloading", YouTube imports only) -> "processing"
     #          -> "completed" or "failed"
-    status = Column(String, nullable=False, default="processing")
+    # Indexed: the sweeper looks up lectures by status every few minutes.
+    status = Column(String, nullable=False, default="processing", index=True)
     error_message = Column(Text, nullable=True)
 
+    # --- Self-healing (see tasks.sweep_stuck_jobs) ---
+    # When `status` last changed. Always set through set_status().
+    status_updated_at = Column(DateTime, nullable=True)
+    # Last time a worker proved it's alive on this lecture (throttled writes
+    # while downloading/transcribing). Cleared when the job ends or retries.
+    heartbeat_at = Column(DateTime, nullable=True)
+    # Transcription progress, 0-100.
+    progress = Column(Float, nullable=True)
+    # How many times the sweeper re-queued this lecture (None = 0).
+    requeue_count = Column(Integer, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+def set_status(lecture: Lecture, value: str) -> None:
+    """The only way `status` should change, so status_updated_at is always
+    right. A finished or failed job no longer has a live worker on it."""
+    lecture.status = value
+    lecture.status_updated_at = datetime.utcnow()
+    if value in ("completed", "failed"):
+        lecture.heartbeat_at = None
+
+
+def set_study_pack_status(lecture: Lecture, value: str | None) -> None:
+    """Same for study_pack_status / study_pack_updated_at."""
+    lecture.study_pack_status = value
+    lecture.study_pack_updated_at = datetime.utcnow()

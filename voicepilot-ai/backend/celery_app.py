@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 load_dotenv()
 REDIS_URL = os.getenv("REDIS_URL")
 
+from config import SWEEP_INTERVAL_SECONDS  # noqa: E402 — after load_dotenv()
+
 celery_app = Celery(
     "voicepilot",
     broker=REDIS_URL,
@@ -42,3 +44,15 @@ celery_app.conf.update(
         "visibility_timeout": 3 * 60 * 60,  # 3 hours
     },
 )
+
+# Celery Beat (the "beat" service in docker-compose) puts a sweep on the
+# queue every SWEEP_INTERVAL_SECONDS; a worker runs it. "expires" drops a
+# sweep that waited longer than one interval behind a long transcription,
+# so a busy worker doesn't run a backlog of identical sweeps afterwards.
+celery_app.conf.beat_schedule = {
+    "sweep-stuck-jobs": {
+        "task": "tasks.sweep_stuck_jobs",
+        "schedule": SWEEP_INTERVAL_SECONDS,
+        "options": {"expires": SWEEP_INTERVAL_SECONDS},
+    },
+}

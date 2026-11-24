@@ -60,6 +60,8 @@ export interface LectureListItem {
   duration_seconds: number | null;
   /** YouTube URL for imported lectures, null for uploads. */
   source_url: string | null;
+  /** Transcription progress 0-100 while status is "processing". */
+  progress: number | null;
   created_at: string;
   has_summary: boolean;
   has_notes: boolean;
@@ -80,6 +82,8 @@ export interface Lecture {
   language: string | null;
   duration_seconds: number | null;
   source_url: string | null;
+  /** Transcription progress 0-100 while status is "processing". */
+  progress: number | null;
   transcript: string | null;
   segments: Segment[] | null;
   processed_segments: Segment[] | null;

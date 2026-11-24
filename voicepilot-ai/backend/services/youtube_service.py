@@ -151,11 +151,14 @@ def get_video_info(url: str) -> dict:
     }
 
 
-def download_audio(url: str, out_dir: str) -> str:
+def download_audio(url: str, out_dir: str, on_activity=None) -> str:
     """
     Downloads only the audio track into out_dir and returns the file path.
     Always ends up as .m4a (ffmpeg converts if YouTube served another codec),
     so the rest of the pipeline sees one predictable format.
+
+    on_activity() is called on every yt-dlp progress update, if given; the
+    worker uses it as a (throttled) heartbeat during long downloads.
     """
     opts = {
         "format": "bestaudio[ext=m4a]/bestaudio/best",
@@ -170,6 +173,8 @@ def download_audio(url: str, out_dir: str) -> str:
             {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
         ],
     }
+    if on_activity:
+        opts["progress_hooks"] = [lambda _status: on_activity()]
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)

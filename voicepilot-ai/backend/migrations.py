@@ -52,3 +52,11 @@ def run_additive_migrations() -> None:
                     logger.warning(
                         "Migration: could not add %s.%s — %s", table.name, column.name, e
                     )
+
+            # Indexes declared on the model (index=True) that the table
+            # doesn't have yet. checkfirst makes this a no-op once created.
+            for index in table.indexes:
+                try:
+                    index.create(bind=conn, checkfirst=True)
+                except Exception as e:
+                    logger.warning("Migration: could not create index %s — %s", index.name, e)

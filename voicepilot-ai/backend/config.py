@@ -62,3 +62,20 @@ YOUTUBE_IMPORT_ENABLED = os.getenv("YOUTUBE_IMPORT_ENABLED", "true").lower() == 
 # it's usually ready before the student opens the lecture. Set to false to
 # only generate on demand (e.g. to control LLM cost).
 AUTO_STUDY_PACK = os.getenv("AUTO_STUDY_PACK", "true").lower() == "true"
+
+# --- Self-healing for stuck lectures (tasks.sweep_stuck_jobs) ---
+# How often a busy worker writes "still alive" (+ progress) for its lecture.
+HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "15"))
+# A heartbeat older than this means the worker is presumed dead: another
+# delivery may take the job over, and the sweeper re-queues it.
+LEASE_SECONDS = int(os.getenv("LEASE_SECONDS", "600"))
+# A lecture "queued" longer than this is re-queued (its message was likely
+# lost). Keep it above the longest backlog you expect behind busy workers.
+QUEUED_STALE_SECONDS = int(os.getenv("QUEUED_STALE_SECONDS", "1800"))
+# A study pack "queued"/"generating" longer than this is re-queued once,
+# then failed so the manual Generate buttons unlock.
+STUDY_PACK_STALE_SECONDS = int(os.getenv("STUDY_PACK_STALE_SECONDS", "900"))
+# How many times the sweeper re-queues one lecture before marking it failed.
+MAX_REQUEUES = int(os.getenv("MAX_REQUEUES", "2"))
+# How often Celery Beat runs the sweeper.
+SWEEP_INTERVAL_SECONDS = int(os.getenv("SWEEP_INTERVAL_SECONDS", "300"))

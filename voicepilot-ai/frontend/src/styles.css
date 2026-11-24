@@ -1221,3 +1221,19 @@ pre {
   gap: 6px;
   color: var(--info);
 }
+
+/* Thin transcription progress bar */
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  margin: 4px 0 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.6s ease;
+}

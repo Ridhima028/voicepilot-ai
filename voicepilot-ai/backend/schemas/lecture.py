@@ -17,6 +17,8 @@ class LectureResponse(BaseModel):
     language: str | None = None
     duration_seconds: float | None = None
     source_url: str | None = None
+    # Transcription progress 0-100, while status is "processing".
+    progress: float | None = None
 
     transcript: str | None = None
     segments: list | None = None
@@ -53,6 +55,7 @@ class LectureListItem(BaseModel):
     language: str | None = None
     duration_seconds: float | None = None
     source_url: str | None = None
+    progress: float | None = None
     created_at: datetime
 
     has_summary: bool = False

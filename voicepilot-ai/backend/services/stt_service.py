@@ -17,7 +17,9 @@ model = WhisperModel(
 )  #this loads the pretrained model
 
 
-def transcribe_audio(audio_path: str):
+def transcribe_audio(audio_path: str, on_progress=None):
+    """on_progress(percent) is called after each segment, if given. Whisper
+    decodes lazily while we iterate, so this tracks real work done."""
     segments, info = model.transcribe(
         audio_path,
         beam_size=5,
@@ -42,6 +44,9 @@ def transcribe_audio(audio_path: str):
             "end": segment.end,
             "text": segment.text.strip()
         })
+
+        if on_progress and info.duration:
+            on_progress(min(100.0, segment.end / info.duration * 100))
 
     full_text = " ".join(
         segment["text"]
